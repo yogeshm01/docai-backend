@@ -1,5 +1,6 @@
 // src/controllers/authController.js
 import bcrypt from 'bcryptjs';
+import jwt from 'jsonwebtoken';
 import { prisma } from '../prismaClient.js';
 
 export async function register(req, res) {
@@ -23,8 +24,16 @@ export async function login(req, res) {
     if (!user) return res.status(401).json({ error: 'Invalid credentials' });
     const match = await bcrypt.compare(password, user.password);
     if (!match) return res.status(401).json({ error: 'Invalid credentials' });
-    // DO NOT generate jwt — just return user info
-    res.json({ id: user.id, username: user.username, email: user.email });
+    // Generate JWT for protected routes
+    const token = jwt.sign(
+      { id: user.id, username: user.username, email: user.email },
+      process.env.JWT_SECRET,
+      { expiresIn: '1h' }
+    );
+    res.json({
+      token,
+      user: { id: user.id, username: user.username, email: user.email }
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
