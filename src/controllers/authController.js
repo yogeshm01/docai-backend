@@ -13,6 +13,16 @@ export async function register(req, res) {
     // return user info (no token)
     res.json({ id: user.id, username: user.username, email: user.email });
   } catch (err) {
+    // Check for unique constraint violation (Prisma error code P2002)
+    console.log(err);
+    if (err.code === 'P2002' && err.meta?.target) {
+      const field = err.meta.target[0];
+      if (field === 'username') {
+        return res.status(400).json({ error: 'Username already exists' });
+      } else if (field === 'email') {
+        return res.status(400).json({ error: 'Email already exists' });
+      }
+    }
     res.status(400).json({ error: err.message });
   }
 }
