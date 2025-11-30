@@ -4,7 +4,8 @@ import authRoutes from './routes/authRoutes.js';
 import documentRoutes from './routes/documentRoutes.js';
 
 const app = express();
-app.use(cors({ origin: ["http://localhost:3000", "https://sabapplier-frontend.vercel.app"] }));
+app.use(cors({ origin: "*" }));
+
 app.use(express.json());
 app.use('/uploads', express.static('src/uploads'));
 
