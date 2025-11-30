@@ -16,7 +16,7 @@ import {
 const router = express.Router();
 import path from 'path';
 
-// Preserve original extension so downstream extractors can infer type
+// ------------------------------------------- MULTER CONFIG -------------------------------------------
 const storage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, 'src/uploads/'),
   filename: (req, file, cb) => {
@@ -30,20 +30,20 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage });
 
+// ------------------------------------------- ROUTES -------------------------------------------
+router.get('/', authMiddleware, getDocuments);                  
+router.get('/:id', authMiddleware, getDocumentById);           
 
-router.get('/', authMiddleware, getDocuments);                 // READ #1
-router.get('/:id', authMiddleware, getDocumentById);           // READ #2
+router.post('/', authMiddleware, upload.single('file'), uploadDocument);      
+router.post('/:id/duplicate', authMiddleware, duplicateDocument);             
 
-router.post('/', authMiddleware, upload.single('file'), uploadDocument);      // CREATE #1
-router.post('/:id/duplicate', authMiddleware, duplicateDocument);             // CREATE #2
+router.post('/:id/ask', authMiddleware, askQuestion);          
 
-router.post('/:id/ask', authMiddleware, askQuestion);          // extra feature, not CRUD
+router.patch('/:id', authMiddleware, updateDocumentMetadata);  
+router.patch('/:id/file', authMiddleware, upload.single('file'), updateDocumentFile); 
 
-router.patch('/:id', authMiddleware, updateDocumentMetadata);  // UPDATE #1
-router.patch('/:id/file', authMiddleware, upload.single('file'), updateDocumentFile); // UPDATE #2
-
-router.delete('/:id', authMiddleware, deleteDocument);         // DELETE #1
-router.delete('/', authMiddleware, bulkDeleteDocuments);       // DELETE #2 (bulk)
+router.delete('/:id', authMiddleware, deleteDocument);         
+router.delete('/', authMiddleware, bulkDeleteDocuments);       
 
 
 export default router;

@@ -8,16 +8,105 @@ import path from 'path';
 // ------------------------------------------- GET DOCUMENTS -------------------------------------------
 export async function getDocuments(req, res) {
   try {
-    const userId = req.query.userId ? Number(req.query.userId) : undefined;
+    const currentUserId = req.user?.id;
+    if (!currentUserId) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
 
-    const where = userId ? { userId } : {}; // if no userId, return all
-    const docs = await prisma.document.findMany({ where });
-    res.json(docs);
+    const {
+      search = '',
+      sort = 'uploadedAt_desc',
+      filter = 'all',
+      page = '1',
+      limit = '4',
+    } = req.query;
+
+    // ---- Normalize pagination ----
+    let pageNum = parseInt(page, 10);
+    let limitNum = parseInt(limit, 10);
+
+    if (!Number.isFinite(pageNum) || pageNum < 1) pageNum = 1;
+    if (!Number.isFinite(limitNum) || limitNum < 1) limitNum = 1;
+    if (limitNum > 50) limitNum = 50;
+
+    const skip = (pageNum - 1) * limitNum;
+
+    // ---- WHERE clause ----
+    const where = {
+      userId: currentUserId,
+    };
+
+    if (search) {
+      where.title = {
+        contains: String(search),
+      };
+    }
+
+    // Date-based filter on uploadedAt
+    if (filter && filter !== 'all') {
+      const now = new Date();
+      let fromDate = null;
+
+      if (filter === 'today') {
+        fromDate = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      } else if (filter === 'week') {
+        fromDate = new Date(now);
+        fromDate.setDate(now.getDate() - 7);
+      } else if (filter === 'month') {
+        fromDate = new Date(now);
+        fromDate.setMonth(now.getMonth() - 1);
+      }
+
+      if (fromDate) {
+        where.uploadedAt = { gte: fromDate };
+      }
+    }
+
+    // ---- ORDER BY clause ----
+    let orderBy;
+    switch (sort) {
+      case 'title_asc':
+        orderBy = { title: 'asc' };
+        break;
+      case 'title_desc':
+        orderBy = { title: 'desc' };
+        break;
+      case 'uploadedAt_asc':
+        orderBy = { uploadedAt: 'asc' };
+        break;
+      case 'uploadedAt_desc':
+      default:
+        orderBy = { uploadedAt: 'desc' };
+        break;
+    }
+
+    // ---- Query with pagination ----
+    const [docs, total] = await Promise.all([
+      prisma.document.findMany({
+        where,
+        orderBy,
+        skip,
+        take: limitNum,
+      }),
+      prisma.document.count({ where }),
+    ]);
+
+    const totalPages = Math.max(1, Math.ceil(total / limitNum));
+
+    return res.json({
+      data: docs,
+      page: pageNum,
+      limit: limitNum,
+      total,
+      totalPages,
+    });
   } catch (err) {
     console.error('getDocuments error:', err);
-    res.status(500).json({ error: 'Server error' });
+    return res.status(500).json({ error: 'Server error' });
   }
 }
+
+
 
 // ------------------------------------------- GET DOCUMENT BY ID -------------------------------------------
 export async function getDocumentById(req, res) {
@@ -32,10 +121,10 @@ export async function getDocumentById(req, res) {
       return res.status(404).json({ error: 'Document not found' });
     }
 
-    // Optional: if you only want owner to see it
-    // if (!req.user || req.user.id !== doc.userId) {
-    //   return res.status(403).json({ error: 'Not allowed to view this document' });
-    // }
+    // Ownership check
+    if (!req.user || req.user.id !== doc.userId) {
+      return res.status(403).json({ error: 'Not allowed to view this document' });
+    }
 
     return res.json(doc);
   } catch (err) {
@@ -62,8 +151,6 @@ export async function duplicateDocument(req, res) {
       return res.status(403).json({ error: 'Not allowed to duplicate this document' });
     }
 
-    // Option A: reuse same filePath
-    // Option B: actually copy the file on disk to a new filename (shown here)
     const oldPath = path.isAbsolute(sourceDoc.filePath)
       ? sourceDoc.filePath
       : path.resolve(sourceDoc.filePath);
@@ -77,8 +164,6 @@ export async function duplicateDocument(req, res) {
       const newAbsPath = path.join(dirName, newName);
 
       fs.copyFileSync(oldPath, newAbsPath);
-
-      // Store relative or absolute path according to your existing pattern
       newFilePath = newAbsPath;
     }
 
@@ -276,11 +361,7 @@ export async function bulkDeleteDocuments(req, res) {
 export async function uploadDocument(req, res) {
   try {
     const { title, userId } = req.body;
-    // if you want to require userId, uncomment:
-    // if (!userId) return res.status(400).json({ error: 'userId is required' });
-
     if (!req.file) return res.status(400).json({ error: 'File required' });
-
     const ownerId = userId ? Number(userId) : null;
 
     const doc = await prisma.document.create({
@@ -310,7 +391,6 @@ export async function askQuestion(req, res) {
     const document = await prisma.document.findUnique({ where: { id: Number(id) } });
     if (!document) return res.status(404).json({ error: 'Document not found' });
 
-    // Resolve absolute path and validate the file before extraction
     const absolutePath = path.isAbsolute(document.filePath)
       ? document.filePath
       : path.resolve(document.filePath);
@@ -331,7 +411,6 @@ export async function askQuestion(req, res) {
       });
     }
 
-    // Clip very large documents to reduce upstream errors and latency
     const MAX_CHARS = 20000;
     const clipped = text.length > MAX_CHARS ? `${text.slice(0, MAX_CHARS)}\n\n[...truncated...]` : text;
     const prompt = `Answer the question based on the following document:\n\n${clipped}\n\nQuestion: ${question}`;
@@ -340,7 +419,6 @@ export async function askQuestion(req, res) {
       contents: [{ parts: [{ text: prompt }] }]
     };
 
-    // Simple retry with timeout to handle transient TLS/network errors
     const requestOnce = () => {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 20000);
@@ -356,7 +434,6 @@ export async function askQuestion(req, res) {
     try {
       response = await requestOnce();
     } catch (e1) {
-      // backoff and retry once
       await new Promise(r => setTimeout(r, 800));
       try {
         response = await requestOnce();
