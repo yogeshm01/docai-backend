@@ -5,11 +5,7 @@ import { prisma } from '../prismaClient.js';
 import { extractText } from '../services/extractText.js';
 import path from 'path';
 
-/**
- * GET /api/documents?userId=123
- * If userId is provided, return documents for that user.
- * If not, return all documents (public).
- */
+// ------------------------------------------- GET DOCUMENTS -------------------------------------------
 export async function getDocuments(req, res) {
   try {
     const userId = req.query.userId ? Number(req.query.userId) : undefined;
@@ -23,11 +19,172 @@ export async function getDocuments(req, res) {
   }
 }
 
-/**
- * DELETE /api/documents/:id
- * Requires auth; only the owner (req.user.id) can delete.
- * Removes the file from disk if present and deletes DB record.
- */
+// ------------------------------------------- GET DOCUMENT BY ID -------------------------------------------
+export async function getDocumentById(req, res) {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) {
+      return res.status(400).json({ error: 'Invalid document id' });
+    }
+
+    const doc = await prisma.document.findUnique({ where: { id } });
+    if (!doc) {
+      return res.status(404).json({ error: 'Document not found' });
+    }
+
+    // Optional: if you only want owner to see it
+    // if (!req.user || req.user.id !== doc.userId) {
+    //   return res.status(403).json({ error: 'Not allowed to view this document' });
+    // }
+
+    return res.json(doc);
+  } catch (err) {
+    console.error('getDocumentById error:', err);
+    return res.status(500).json({ error: 'Server error' });
+  }
+}
+
+// ------------------------------------------- DUPLICATE DOCUMENT -------------------------------------------
+export async function duplicateDocument(req, res) {
+  try {
+    const sourceId = Number(req.params.id);
+    if (!Number.isFinite(sourceId)) {
+      return res.status(400).json({ error: 'Invalid document id' });
+    }
+
+    const sourceDoc = await prisma.document.findUnique({ where: { id: sourceId } });
+    if (!sourceDoc) {
+      return res.status(404).json({ error: 'Source document not found' });
+    }
+
+    // Ownership check – only owner can duplicate
+    if (!req.user || req.user.id !== sourceDoc.userId) {
+      return res.status(403).json({ error: 'Not allowed to duplicate this document' });
+    }
+
+    // Option A: reuse same filePath
+    // Option B: actually copy the file on disk to a new filename (shown here)
+    const oldPath = path.isAbsolute(sourceDoc.filePath)
+      ? sourceDoc.filePath
+      : path.resolve(sourceDoc.filePath);
+
+    let newFilePath = sourceDoc.filePath;
+    if (fs.existsSync(oldPath)) {
+      const ext = path.extname(oldPath);
+      const baseName = path.basename(oldPath, ext);
+      const dirName = path.dirname(oldPath);
+      const newName = `${baseName}_copy_${Date.now()}${ext}`;
+      const newAbsPath = path.join(dirName, newName);
+
+      fs.copyFileSync(oldPath, newAbsPath);
+
+      // Store relative or absolute path according to your existing pattern
+      newFilePath = newAbsPath;
+    }
+
+    const duplicated = await prisma.document.create({
+      data: {
+        title: sourceDoc.title + ' (copy)',
+        filePath: newFilePath,
+        userId: sourceDoc.userId,
+      },
+    });
+
+    return res.status(201).json(duplicated);
+  } catch (err) {
+    console.error('duplicateDocument error:', err);
+    return res.status(500).json({ error: 'Server error' });
+  }
+}
+
+
+// ------------------------------------------- UPDATE DOCUMENT METADATA -------------------------------------------
+export async function updateDocumentMetadata(req, res) {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) {
+      return res.status(400).json({ error: 'Invalid document id' });
+    }
+
+    const { title } = req.body;
+    if (!title || typeof title !== 'string') {
+      return res.status(400).json({ error: 'Title is required and must be a string' });
+    }
+
+    const existing = await prisma.document.findUnique({ where: { id } });
+    if (!existing) {
+      return res.status(404).json({ error: 'Document not found' });
+    }
+
+    // Ownership check
+    if (!req.user || req.user.id !== existing.userId) {
+      return res.status(403).json({ error: 'Not allowed to update this document' });
+    }
+
+    const updated = await prisma.document.update({
+      where: { id },
+      data: { title },
+    });
+
+    return res.json(updated);
+  } catch (err) {
+    console.error('updateDocumentMetadata error:', err);
+    return res.status(500).json({ error: 'Server error' });
+  }
+}
+
+
+// ------------------------------------------- UPDATE DOCUMENT FILE -------------------------------------------
+export async function updateDocumentFile(req, res) {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) {
+      return res.status(400).json({ error: 'Invalid document id' });
+    }
+
+    if (!req.file) {
+      return res.status(400).json({ error: 'File is required' });
+    }
+
+    const existing = await prisma.document.findUnique({ where: { id } });
+    if (!existing) {
+      return res.status(404).json({ error: 'Document not found' });
+    }
+
+    // Ownership check
+    if (!req.user || req.user.id !== existing.userId) {
+      return res.status(403).json({ error: 'Not allowed to update this document file' });
+    }
+
+    // Remove old file if it exists
+    try {
+      const oldAbsolutePath = path.isAbsolute(existing.filePath)
+        ? existing.filePath
+        : path.resolve(existing.filePath);
+
+      if (fs.existsSync(oldAbsolutePath)) {
+        fs.unlinkSync(oldAbsolutePath);
+      }
+    } catch (e) {
+      console.warn('updateDocumentFile: failed to remove old file', e);
+    }
+
+    const updated = await prisma.document.update({
+      where: { id },
+      data: {
+        filePath: req.file.path,
+      },
+    });
+
+    return res.json(updated);
+  } catch (err) {
+    console.error('updateDocumentFile error:', err);
+    return res.status(500).json({ error: 'Server error' });
+  }
+}
+
+
+// ------------------------------------------- DELETE DOCUMENT -------------------------------------------
 export async function deleteDocument(req, res) {
   try {
     const { id } = req.params;
@@ -60,10 +217,62 @@ export async function deleteDocument(req, res) {
     return res.status(500).json({ error: 'Server error' });
   }
 }
-/**
- * POST /api/documents
- * Accepts form-data with 'title', 'file', and (optional) 'userId'
- */
+
+
+// ------------------------------------------- BULK DELETE DOCUMENTS -------------------------------------------
+export async function bulkDeleteDocuments(req, res) {
+  try {
+    const { ids } = req.body;
+    if (!Array.isArray(ids) || ids.length === 0) {
+      return res.status(400).json({ error: 'ids array is required' });
+    }
+
+    const docIds = ids.map(Number).filter(Number.isFinite);
+    if (docIds.length === 0) {
+      return res.status(400).json({ error: 'No valid document ids provided' });
+    }
+
+    // Fetch documents to check ownership and clean up files
+    const docs = await prisma.document.findMany({
+      where: { id: { in: docIds } },
+    });
+
+    // Only allow deletion of docs owned by this user
+    const ownedDocs = docs.filter(d => d.userId === req.user?.id);
+    const ownedIds = ownedDocs.map(d => d.id);
+
+    if (ownedIds.length === 0) {
+      return res.status(403).json({ error: 'No documents owned by you in the given ids' });
+    }
+
+    // Delete files from disk
+    for (const doc of ownedDocs) {
+      try {
+        const absolutePath = path.isAbsolute(doc.filePath)
+          ? doc.filePath
+          : path.resolve(doc.filePath);
+        if (fs.existsSync(absolutePath)) {
+          fs.unlinkSync(absolutePath);
+        }
+      } catch (e) {
+        console.warn('bulkDeleteDocuments: failed to remove file for doc', doc.id, e);
+      }
+    }
+
+    // Delete from DB
+    await prisma.document.deleteMany({
+      where: { id: { in: ownedIds } },
+    });
+
+    return res.status(204).send();
+  } catch (err) {
+    console.error('bulkDeleteDocuments error:', err);
+    return res.status(500).json({ error: 'Server error' });
+  }
+}
+
+
+// ------------------------------------------- UPLOAD DOCUMENT -------------------------------------------
 export async function uploadDocument(req, res) {
   try {
     const { title, userId } = req.body;
@@ -82,18 +291,16 @@ export async function uploadDocument(req, res) {
       },
     });
 
-    res.json(doc);
+    res.status(201).json(doc);
   } catch (err) {
     console.error('uploadDocument error:', err);
     res.status(500).json({ error: 'Server error' });
   }
 }
 
-/**
- * POST /api/documents/:id/ask
- * Accepts { question: "...", userId: optional } in JSON body
- * The function finds the document (no auth check) and asks Gemini.
- */
+
+
+// ------------------------------------------- ASK QUESTION -------------------------------------------
 export async function askQuestion(req, res) {
   try {
     const { id } = req.params;

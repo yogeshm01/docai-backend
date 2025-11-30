@@ -1,7 +1,17 @@
 import express from 'express';
 import multer from 'multer';
 import { authMiddleware } from '../middleware/authMiddleware.js';
-import { uploadDocument, getDocuments, askQuestion, deleteDocument } from '../controllers/documentController.js';
+import {
+  getDocuments,
+  getDocumentById,
+  uploadDocument,
+  duplicateDocument,
+  askQuestion,
+  updateDocumentMetadata,
+  updateDocumentFile,
+  deleteDocument,
+  bulkDeleteDocuments,
+} from '../controllers/documentController.js';
 
 const router = express.Router();
 import path from 'path';
@@ -20,9 +30,20 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage });
 
-router.get('/', authMiddleware, getDocuments);
-router.post('/', authMiddleware, upload.single('file'), uploadDocument);
-router.post('/:id/ask', authMiddleware, askQuestion);
-router.delete('/:id', authMiddleware, deleteDocument);
+
+router.get('/', authMiddleware, getDocuments);                 // READ #1
+router.get('/:id', authMiddleware, getDocumentById);           // READ #2
+
+router.post('/', authMiddleware, upload.single('file'), uploadDocument);      // CREATE #1
+router.post('/:id/duplicate', authMiddleware, duplicateDocument);             // CREATE #2
+
+router.post('/:id/ask', authMiddleware, askQuestion);          // extra feature, not CRUD
+
+router.patch('/:id', authMiddleware, updateDocumentMetadata);  // UPDATE #1
+router.patch('/:id/file', authMiddleware, upload.single('file'), updateDocumentFile); // UPDATE #2
+
+router.delete('/:id', authMiddleware, deleteDocument);         // DELETE #1
+router.delete('/', authMiddleware, bulkDeleteDocuments);       // DELETE #2 (bulk)
+
 
 export default router;
